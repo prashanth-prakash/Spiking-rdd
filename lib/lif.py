@@ -11,10 +11,23 @@ f = gzip.open('/home/prashanth/rdd/mnist.pkl.gz', 'rb')
 train_set, valid_set, test_set = cPickle.load(f)
 f.close()
 
+
+nb_classes = 10
+data = [[0,1,2,3,4,5,6,7,8,9]]
+
+def indices_to_one_hot(data, nb_classes):
+    """Convert an iterable of indices to one-hot encoded labels."""
+    targets = np.array(data).reshape(-1)
+    return np.eye(nb_classes)[targets]
+
+one_hot_lookup=indices_to_one_hot(data,10)
+
 def mnist_spike(lamba,D,kernel):
+    
     rand_num=random.randint(0,train_set[0].shape[0])
     mnist_rand=(train_set[0][rand_num]) 
     label_rand=train_set[1][rand_num]
+    label_rand_onehot=one_hot_lookup[label_rand-1,:]
     new_var=np.zeros([784,D])
     for i in range(mnist_rand.shape[0]):
         x = np.random.uniform(0,1,D)
@@ -22,7 +35,7 @@ def mnist_spike(lamba,D,kernel):
         store_bool = x < (lamba*mnist_rand[i])
         #new_var[i,:] = store_bool*1
         new_var[i,:]=np.convolve(store_bool*1,kernel)[0:1000]
-    return new_var
+    return new_var,label_rand_onehot
         
 def activation(u,xw,std,gl,theta):
     #scipy quadrature
@@ -39,8 +52,8 @@ def activation(u,xw,std,gl,theta):
 def integrate(xw,std,gl,theta):
     return quad(activation,0,np.inf,args=(xw, std,gl,theta))
 
-def gradient(mu):
-    return np.diff(mu)
+def gradient(x,sigma,gl,theta):
+    return (np.diff(integrate(x,sigma,gl,theta)))
 
 def convolve_online(s, h, kernel, t_offset):
     if len(s.shape) > 1:
@@ -98,7 +111,7 @@ class ParamsLIF(object):
 class ParamsLIF_Recurrent(object):
     
     def __init__(self, kernel, dt = 0.001, tr = 0.003, mu = 1, reset = 0, xsigma = 1, n1 = 2, n2 = 10, tau = 1,
-        c = 0.99, sigma = 20, sigma1 = 0.1, sigma2 = 0.1,iterations = 2):
+        c = 0.99, sigma = 20, sigma1 = 0.1, sigma2 = 0.1,iterations = 2,learning_rate=0.1):
 
         self.dt = dt            #Step size
         self.tr = tr            #Refractory period
@@ -115,6 +128,7 @@ class ParamsLIF_Recurrent(object):
         self.iterations=iterations
         self.sigma1=sigma1
         self.sigma2=sigma2
+        self.learning_rate=learning_rate
         
 class ParamsLSM(ParamsLIF):
 
@@ -594,7 +608,7 @@ class LIF_Recurrent(object):
         self.times = np.linspace(0,self.t,self.T)
         
         #Input signal
-        self.x = mnist_spike(lamba=0.02,D=self.T,kernel=self.params.kernel)
+        self.x,self.y = mnist_spike(lamba=0.02,D=self.T,kernel=self.params.kernel)
         #Input to each neuron in first layer weights
         self.params.sigma1=10
         self.params.sigma2=2
@@ -626,13 +640,13 @@ class LIF_Recurrent(object):
         
         #if deltaT is provided then in blocks of deltaT we compute the counterfactual trace... the evolution without spiking.
         inp=np.zeros((self.params.iterations,784,self.T))
-        v = np.zeros((self.params.iterations,self.params.n,self.T))
+        v = np.zeros((self.params.n,self.T))
 
         if deltaT is not None:
             u = np.zeros((self.params.n,self.T))
         else:
             u = None
-        h = np.zeros((self.params.iterations,self.params.n,self.T))
+        h = np.zeros((self.params.n,self.T))
         if not self.keepstate:
             self.vt = np.zeros(self.params.n)
             self.ut = np.zeros(self.params.n)
@@ -656,10 +670,11 @@ class LIF_Recurrent(object):
         #Simulate t seconds
        
         for iter in range(self.params.iterations):
-            self.x=mnist_spike(lamba=0.02,D=self.T,kernel=self.params.kernel)
+            self.x,self.y=mnist_spike(lamba=0.02,D=self.T,kernel=self.params.kernel)
+            print("size of output:",self.y)
             inp[iter,:,:]=self.x
-            print(iter)
-           
+          #  print(iter)
+            
                 #print(pix)
             for i in range(self.T):
                 #ut is not reset by spiking. ut is set to vt at the start of each block of deltaT
@@ -677,8 +692,8 @@ class LIF_Recurrent(object):
                 for s_idx in np.nonzero(s)[0]:
                     convolve_online_v2(sh, s_idx, i, self.params.kernel, 0)
                     #Save the voltages and spikes
-                h[iter,:,i] = s.astype(int)
-                v[iter,:,i] = vt
+                h[:,i] = s.astype(int)
+                v[:,i] = vt
                 if deltaT is not None:
                     u[:,i] = ut
                     #Make spiking neurons refractory
@@ -691,31 +706,51 @@ class LIF_Recurrent(object):
                 r[r>0] -= 1
             
             self.vt = vt
+            self.backprop(h,epoch=1)
             #self.sh = sh
             
         return (inp,v, h, u, sh)
                                      
         
-    def backprop(self,epoch=3):
+    def backprop(self,h,epoch=1):
         std=20
         gl=0.1
         theta=0.5
-        print(self.W.shape)
+        #print(self.W.shape)
         print(self.x.shape)
-        print(self.U.shape)
+        #print(self.U.shape)
         vec_integral=np.vectorize(integrate)
         for ep in range(epoch):
-            xw=np.dot(self.W,self.x)
-            hidden=vec_integral(xw, self.params.sigma1,gl,theta)
-            print(hidden)
-            hidU=np.dot(hidden,self.U)
-            y_hat=vec_integral(hidU, self.params.sigma2,gl,theta)
-            e=y_hat-y
-            dLdu=np.multiply(e,y_hat)
-            dLdw=np.multiply(dLdu,gradient(activation(self.x, self.W, std, gl, u,theta)))
-            w=w-self.eta*dLdw
-            u=u-self.eta*dLdu
-        return  
+            #xw=np.dot(self.W,self.x)
+            hidden = np.mean(self.sh,1)# average over t timesteps 
+            print(hidden.shape)
+            y_hat=np.mean(self.sh[self.params.n1::],1) # 10 outs
+            #hidden=vec_integral(xw, self.params.sigma1,gl,theta)
+            #print(hidden)
+            #hidU=np.dot(hidden,self.U)
+            #y_hat=vec_integral(hidU, self.params.sigma2,gl,theta)
+            e=y_hat-self.y
+            e=e.reshape([y_hat.shape[0],1])
+            print("e shape:",e.shape)
+            print("sh shape:",np.mean(self.sh[self.params.n1::,:],1).shape)
+            dLdu=np.multiply(e,vec_integral(np.mean(self.sh[self.params.n1::,:],1),self.params.sigma1,gl,theta)[0])
+            print("dLdu shape:",dLdu.shape)
+            delta=np.multiply(e,vec_integral(self.U[self.params.n1:,0:self.params.n1],
+                                             self.params.sigma1,gl,theta)[0])#,gradient(self.sh))
+            print("delta shape:",delta.shape)
+            print("size W:",self.W.shape)
+            #print("size tmp:",vec_integral(h[0:self.params.n1,:],self.params.sigma1,gl,theta)[0].shape)
+            tmp2=np.dot(delta.T,vec_integral(np.mean(self.sh[self.params.n1:,:],1),self.params.sigma1,gl,theta)[0])
+            print(tmp2.shape)
+            tmp3=np.multiply(tmp2,np.mean(self.sh[0:self.params.n1,:],1))
+            tmp3=np.reshape(tmp3,[tmp3.shape[0],1])
+            #print(np.mean(self.x,1).shape)
+            dLdw=np.dot(tmp3,np.reshape(np.mean(self.x,1),[784,1]).T)
+            print("dLdw shape:",dLdw.shape)
+            self.W=self.W-self.params.learning_rate*dLdw
+            self.U[self.params.n1:,0:self.params.n1]=self.U[self.params.n1:,0:self.params.n1]-self.params.learning_rate*dLdu
+            
+        return 
      
                                      
                                
