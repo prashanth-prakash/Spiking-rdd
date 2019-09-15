@@ -49,21 +49,17 @@ def activation(u,xw,std,gl,theta):
     y_th = np.divide(theta-xw,std)
     y_r = np.divide(xw,np.float(std))
     first = np.exp(-u**2+ 2*y_th*u)
-    second = np.exp(-u**2+ 2*y_r*u,dtype=np.float128)
+    second = np.exp(-u**2+ 2*y_r*u)#,dtype=np.float128)
     #print("first:",first)
     #print("second:",second)
     integral = 1/gl*1/u*(first-second)
     #if 1/integral==np.inf:
    # print("y_r",y_r)
-   # print("u",u)
-   # print("-u**2+ 2*y_r*u",-u**2+ 2*y_r*u)
-   # print("first:",first)
-   # print("second",second)
-    print("1/integral:",1/integral)
-
-    integral=1/integral
-
-#    mu=np.diff(mu)
+    #print("u",u)
+    #print("-u**2+ 2*y_r*u",-u**2+ 2*y_r*u)
+    #print("first:",first)
+    #print("second",second)
+    #print("integral:",integral)
     return integral
 
 def integrate(xw,std,gl,theta):
@@ -743,21 +739,21 @@ class LIF_Recurrent(object):
             
         y_hat=np.mean(self.sh[self.params.n1:,:],1) # 10 outs     
         print("y_hat:",y_hat)
-        print("integral y_hat:",vec_integral(y_hat,self.params.sigma1,gl,theta)[0])
+        #print("integral y_hat:",vec_integral(y_hat,self.params.sigma1,gl,theta)[0])
         e=np.multiply(y_hat-self.y , vec_integral(y_hat,self.params.sigma1,gl,theta)[0])
         e=e.reshape([y_hat.shape[0],1])
             
   #          print("e shape:",e.shape)
-        tograph=vec_integral(np.reshape(np.mean(self.x,1),[1,784]),self.params.sigma1,gl,theta)[0]
+        tograph=np.divide(1,vec_integral(np.reshape(np.mean(self.x,1),[1,784]),self.params.sigma1,gl,theta)[0])
             
-        padded1 = np.pad(gradient(vec_integral(y_hat,self.params.sigma1,gl,theta)[0]),(0,1),'constant', constant_values=(0)) #padding with an additional zero due to dimensionality missmatch
+        padded1 = np.pad(gradient(np.divide(1,vec_integral(y_hat,self.params.sigma1,gl,theta)[0])),(0,1),'constant', constant_values=(0)) #padding with an additional zero due to dimensionality missmatch
         padded1=np.reshape(padded1,[10,1])
         delta = np.multiply(e,padded1)
         hidden=np.reshape(hidden,[200,1])
         dLdU = np.dot(delta,hidden.T)
             
    #         print("dLdu shape:",dLdU.shape)
-        int1=gradient(vec_integral(np.reshape(np.mean(self.x,1),[1,784]),self.params.sigma1,gl,theta)[0])
+        int1=gradient(np.divide(1,vec_integral(np.reshape(np.mean(self.x,1),[1,784]),self.params.sigma1,gl,theta)[0]))
   #          print(np.pad(int1[0,:],(0,1),'constant', constant_values=(0)).shape)
 #            print(int1.shape)
         padded2=np.pad(int1[0,:]
