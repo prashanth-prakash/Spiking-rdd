@@ -19,6 +19,7 @@ def indices_to_one_hot(data, nb_classes):
     """Convert an iterable of indices to one-hot encoded labels."""
     targets = np.array(data).reshape(-1)
     return np.eye(nb_classes)[targets]
+
 nb_classes = 10
 data = [[0,1,2,3,4,5,6,7,8,9]]
 one_hot_lookup=indices_to_one_hot(data,10) 
@@ -46,10 +47,21 @@ def activation(u,xw,std,gl,theta):
     #scipy quadrature
     #inpstd = std*w
     y_th = np.divide(theta-xw,std)
-    y_r = np.divide(xw,std)
+    y_r = np.divide(xw,np.float(std))
     first = np.exp(-u**2+ 2*y_th*u)
-    second = np.exp(-u**2+ 2*y_r*u)
+    second = np.exp(-u**2+ 2*y_r*u,dtype=np.float128)
+    #print("first:",first)
+    #print("second:",second)
     integral = 1/gl*1/u*(first-second)
+    #if 1/integral==np.inf:
+   # print("y_r",y_r)
+   # print("u",u)
+   # print("-u**2+ 2*y_r*u",-u**2+ 2*y_r*u)
+   # print("first:",first)
+   # print("second",second)
+    print("1/integral:",1/integral)
+
+    integral=1/integral
 
 #    mu=np.diff(mu)
     return integral
@@ -710,25 +722,28 @@ class LIF_Recurrent(object):
                 #Decrement the refractory counters
                 r[r>0] -= 1
             
-            tograph=self.backprop(h,epoch=1)
+        tograph=self.backprop(h,epoch=1)
             #self.sh = sh
             
         return (inp,v, h, u, sh,tograph,self.x)
                                      
         
     def backprop(self,h,epoch=1):
+        
         std=20
         gl=0.1
         theta=0.5
 
-        print(self.x.shape)
+        #print(self.x.shape)
         vec_integral=np.vectorize(integrate)
         
         
         hidden = np.mean(self.sh[0:self.params.n1,:],1)# average over t timesteps 
-        print(hidden.shape)
+        #print(hidden.shape)
             
-        y_hat=np.mean(self.sh[self.params.n1:,:],1) # 10 outs            
+        y_hat=np.mean(self.sh[self.params.n1:,:],1) # 10 outs     
+        print("y_hat:",y_hat)
+        print("integral y_hat:",vec_integral(y_hat,self.params.sigma1,gl,theta)[0])
         e=np.multiply(y_hat-self.y , vec_integral(y_hat,self.params.sigma1,gl,theta)[0])
         e=e.reshape([y_hat.shape[0],1])
             
