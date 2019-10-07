@@ -124,7 +124,7 @@ class ParamsLIF(object):
 class ParamsLIF_Recurrent(object):
     
     def __init__(self, kernel, dt = 0.001, tr = 0.003, mu = 1, reset = 0, xsigma = 1, n1 = 2, n2 = 10, tau = 1,
-        c = 0.99, sigma = 20, sigma1 = 0.1, sigma2 = 0.1,iterations = 2,learning_rate=0.1):
+        c = 0.99, sigma = 20, sigma1 = 0.1, sigma2 = 0.1,iterations = 1000,learning_rate=0.1):
 
         self.dt = dt            #Step size
         self.tr = tr            #Refractory period
@@ -654,7 +654,10 @@ class LIF_Recurrent(object):
         #if deltaT is provided then in blocks of deltaT we compute the counterfactual trace... the evolution without spiking.
         inp=np.zeros((self.params.iterations,784,self.T))
         v = np.zeros((self.params.n,self.T))
-
+        st_err = []
+        st_actv = []
+        st_x = []
+        st_y = []
         if deltaT is not None:
             u = np.zeros((self.params.n,self.T))
         else:
@@ -718,55 +721,70 @@ class LIF_Recurrent(object):
                 #Decrement the refractory counters
                 r[r>0] -= 1
             
-        tograph=self.backprop(h,epoch=1)
+            tograph,error=self.backprop()
             #self.sh = sh
-            
-        return (inp,v, h, u, sh,tograph,self.x)
+            st_x.append(self.x)
+            st_y.append(self.y)
+            st_actv.append(tograph)
+            st_err.append(error)    
+        return (inp,v, h, u, sh,st_actv,st_err,st_x,st_y)
                                      
         
-    def backprop(self,h,epoch=1):
+    def backprop(self):
         
         std=20
         gl=0.1
         theta=0.5
 
-        #print(self.x.shape)
-        vec_integral=np.vectorize(integrate)
+        print(self.x.shape)
+        vec_integral = np.vectorize(integrate)
         
         
         hidden = np.mean(self.sh[0:self.params.n1,:],1)# average over t timesteps 
         #print(hidden.shape)
             
-        y_hat=np.mean(self.sh[self.params.n1:,:],1) # 10 outs     
+        y_hat = np.mean(self.sh[self.params.n1:,:],1) # 10 outs     
         print("y_hat:",y_hat)
         #print("integral y_hat:",vec_integral(y_hat,self.params.sigma1,gl,theta)[0])
-        e=np.multiply(y_hat-self.y , vec_integral(y_hat,self.params.sigma1,gl,theta)[0])
-        e=e.reshape([y_hat.shape[0],1])
+        e = np.multiply(y_hat-self.y , vec_integral(y_hat,self.params.sigma1,gl,theta)[0])
+        e = e.reshape([y_hat.shape[0],1])
             
-  #          print("e shape:",e.shape)
-        tograph=np.divide(1,vec_integral(np.reshape(np.mean(self.x,1),[1,784]),self.params.sigma1,gl,theta)[0])
+        print("e shape:",e.shape)
+        tograph = np.divide(1,vec_integral(np.reshape(np.mean(self.x,1),[1,784]),self.params.sigma1,gl,theta)[0])
             
-        padded1 = np.pad(gradient(np.divide(1,vec_integral(y_hat,self.params.sigma1,gl,theta)[0])),(0,1),'constant', constant_values=(0)) #padding with an additional zero due to dimensionality missmatch
-        padded1=np.reshape(padded1,[10,1])
+        #padded1 = np.pad(gradient(np.divide(1,vec_integral(y_hat,self.params.sigma1,gl,theta)[0])),(0,1),'constant', constant_values=(0)) #padding with an additional zero due to dimensionality missmatch
+      
+        #padded1 = np.reshape(padded1,[10,1])
+        
+        grad_y = np.zeros([y_hat.shape[0],1])
+        grad_y[np.where(y_hat > 0),0] = 1
+        grad_y[np.where(y_hat <= 0),0] = 0
+        padded1 = grad_y
+        print("grad_yhat",grad_y.shape)
         delta = np.multiply(e,padded1)
-        hidden=np.reshape(hidden,[200,1])
+        hidden = np.reshape(hidden,[200,1])
         dLdU = np.dot(delta,hidden.T)
             
    #         print("dLdu shape:",dLdU.shape)
-        int1=gradient(np.divide(1,vec_integral(np.reshape(np.mean(self.x,1),[1,784]),self.params.sigma1,gl,theta)[0]))
+        #int1 = gradient(np.divide(1,vec_integral(np.reshape(np.mean(self.x,1),[1,784]),self.params.sigma1,gl,theta)[0]))
   #          print(np.pad(int1[0,:],(0,1),'constant', constant_values=(0)).shape)
 #            print(int1.shape)
-        padded2=np.pad(int1[0,:]
-                          ,(0,1),'constant', constant_values=(0))
-        padded2=padded2.reshape([784,1])
-        delta1=np.multiply(np.dot(delta.T,self.U[self.params.n1:,0:self.params.n1]),padded2)
+        
+        #padded2 = np.pad(int1[0,:],(0,1),'constant', constant_values=(0))
+        #padded2 = padded2.reshape([784,1])
+        mean_x = np.mean(self.x,1)
+        grad_x = np.zeros([784,1])
+        grad_x[np.where(mean_x > 0),0] = 1
+        grad_x[np.where(mean_x <= 0),0]=0
+        padded2 = grad_x
+        delta1 = np.multiply(np.dot(delta.T,self.U[self.params.n1:,0:self.params.n1]),padded2)
  #           print("delta1:",delta1.shape)
-        dLdw=np.dot(delta1.T,np.reshape(np.mean(self.x,1),[784,1]))
+        dLdw = np.dot(delta1.T,np.reshape(mean_x,[784,1]))
 #            print("dLdw shape:",dLdw.shape)
-        self.W=self.W-self.params.learning_rate*dLdw
-        self.U[self.params.n1:,0:self.params.n1]=self.U[self.params.n1:,0:self.params.n1]-self.params.learning_rate*dLdU
+        self.W = self.W-self.params.learning_rate*dLdw
+        self.U[self.params.n1:,0:self.params.n1] = self.U[self.params.n1:,0:self.params.n1]-self.params.learning_rate*dLdU
             
-        return tograph 
+        return tograph,e 
      
                                      
                                
